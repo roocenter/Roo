@@ -31,7 +31,7 @@ Open http://localhost:3000
 ### Environment
 Create `.env.local`:
 ```env
-NEXT_PUBLIC_GATEWAY_TOKEN=0f7016e02a90f2975492e02cf051c5c4f9d1e7ac6f43c011
+NEXT_PUBLIC_GATEWAY_TOKEN=YOUR_OPENCLAW_GATEWAY_TOKEN
 ```
 
 ## Build Check
