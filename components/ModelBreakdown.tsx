@@ -17,6 +17,10 @@ export function ModelBreakdown({ rows }: { rows: ModelRow[] }) {
     <div className="rounded-xl border border-border bg-panel p-4">
       <h3 className="mb-4 text-sm font-medium text-zinc-200">Model Breakdown</h3>
       <div className="space-y-4">
+        {rows.length === 0 ? (
+          <div className="rounded-lg border border-[#1a1a1a] bg-[#0f0f0f] p-3 text-sm text-zinc-500">No model usage in selected period.</div>
+        ) : null}
+
         {rows.map((row) => (
           <div key={row.model} className="rounded-lg border border-[#1a1a1a] bg-[#0f0f0f] p-3">
             <div className="mb-2 flex items-center justify-between text-sm">

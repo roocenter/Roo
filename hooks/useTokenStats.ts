@@ -40,15 +40,14 @@ const BUCKETS: Record<TimeRange, number> = {
   '30D': 15,
 };
 
-const MODEL_BUCKETS = ['gpt-5.2', 'codex-5.3', 'claude-sonnet', 'codex-mini'] as const;
-type ModelBucket = (typeof MODEL_BUCKETS)[number] | 'other';
+const PINNED_MODELS = ['gpt-5.2', 'codex-5.3', 'claude-sonnet', 'codex-mini'] as const;
+type PinnedModel = (typeof PINNED_MODELS)[number];
 
-const MODEL_BUCKET_META: Record<ModelBucket, { label: string; color: string }> = {
-  'gpt-5.2': { label: 'gpt-5.2', color: '#3b82f6' },
-  'codex-5.3': { label: 'codex-5.3', color: '#7c3aed' },
-  'claude-sonnet': { label: 'claude-sonnet', color: '#f97316' },
-  'codex-mini': { label: 'codex-mini', color: '#22c55e' },
-  other: { label: 'other', color: '#71717a' },
+const PINNED_MODEL_META: Record<PinnedModel, { label: string; color: string; fallbackRaw: string }> = {
+  'gpt-5.2': { label: 'gpt-5.2', color: '#3b82f6', fallbackRaw: 'openai/gpt-5.2' },
+  'codex-5.3': { label: 'codex-5.3', color: '#7c3aed', fallbackRaw: 'openai-codex/gpt-5.3-codex' },
+  'claude-sonnet': { label: 'claude-sonnet', color: '#f97316', fallbackRaw: 'anthropic/claude-sonnet-4-6' },
+  'codex-mini': { label: 'codex-mini', color: '#22c55e', fallbackRaw: 'openai-codex/gpt-5.1-codex-mini' },
 };
 
 const MOCK_MODELS = [
@@ -106,13 +105,26 @@ function getTimestampMs(timestamp: unknown): number {
   return 0;
 }
 
-function mapModelToBucket(model: string): ModelBucket {
+function mapModelToPinned(model: string): PinnedModel | null {
   const normalized = model.toLowerCase();
   if (normalized.includes('gpt-5.3-codex')) return 'codex-5.3';
   if (normalized.includes('gpt-5.1-codex-mini')) return 'codex-mini';
   if (normalized.includes('claude-sonnet')) return 'claude-sonnet';
   if (normalized.includes('gpt-5.2')) return 'gpt-5.2';
-  return 'other';
+  return null;
+}
+
+function normalizeUnknownModelLabel(model: string): string {
+  const trimmed = model.trim();
+  if (!trimmed) return 'unknown-model';
+
+  const slashPart = trimmed.includes('/') ? trimmed.split('/').pop() ?? trimmed : trimmed;
+  return slashPart.replace(/^models?\//i, '') || trimmed;
+}
+
+function colorForModel(model: string): string {
+  const meta = modelMeta(model);
+  return meta.color || '#71717a';
 }
 
 export function useTokenStats(range: TimeRange) {
@@ -198,58 +210,82 @@ export function useTokenStats(range: TimeRange) {
 
     const grouped = current.reduce(
       (acc, s) => {
-        const bucket = mapModelToBucket(s.model || '');
+        const pinned = mapModelToPinned(s.model || '');
+        const key = pinned ?? s.model;
         const tokensIn = s.tokensIn || 0;
         const tokensOut = s.tokensOut || 0;
-        const fallbackModel =
-          bucket === 'gpt-5.2'
-            ? 'openai/gpt-5.2'
-            : bucket === 'codex-5.3'
-              ? 'openai-codex/gpt-5.3-codex'
-              : bucket === 'claude-sonnet'
-                ? 'anthropic/claude-sonnet-4-6'
-                : bucket === 'codex-mini'
-                  ? 'openai-codex/gpt-5.1-codex-mini'
-                  : s.model;
 
-        acc[bucket].tokensIn += tokensIn;
-        acc[bucket].tokensOut += tokensOut;
-        acc[bucket].estimatedCostUSD += s.estimatedCostUSD ?? estimateCostUSD(fallbackModel, tokensIn, tokensOut);
+        if (!acc[key]) {
+          acc[key] = {
+            key,
+            rawModel: pinned ? PINNED_MODEL_META[pinned].fallbackRaw : s.model,
+            label: pinned ? PINNED_MODEL_META[pinned].label : normalizeUnknownModelLabel(s.model),
+            color: pinned ? PINNED_MODEL_META[pinned].color : colorForModel(s.model),
+            pinned,
+            tokensIn: 0,
+            tokensOut: 0,
+            estimatedCostUSD: 0,
+          };
+        }
+
+        acc[key].tokensIn += tokensIn;
+        acc[key].tokensOut += tokensOut;
+        acc[key].estimatedCostUSD += s.estimatedCostUSD ?? estimateCostUSD(acc[key].rawModel, tokensIn, tokensOut);
+
         return acc;
       },
-      {
-        'gpt-5.2': { tokensIn: 0, tokensOut: 0, estimatedCostUSD: 0 },
-        'codex-5.3': { tokensIn: 0, tokensOut: 0, estimatedCostUSD: 0 },
-        'claude-sonnet': { tokensIn: 0, tokensOut: 0, estimatedCostUSD: 0 },
-        'codex-mini': { tokensIn: 0, tokensOut: 0, estimatedCostUSD: 0 },
-        other: { tokensIn: 0, tokensOut: 0, estimatedCostUSD: 0 },
-      } as Record<ModelBucket, { tokensIn: number; tokensOut: number; estimatedCostUSD: number }>
+      {} as Record<
+        string,
+        {
+          key: string;
+          rawModel: string;
+          label: string;
+          color: string;
+          pinned: PinnedModel | null;
+          tokensIn: number;
+          tokensOut: number;
+          estimatedCostUSD: number;
+        }
+      >
     );
 
-    const byModel = MODEL_BUCKETS.map((model) => {
-      const row = grouped[model];
-      const total = row.tokensIn + row.tokensOut;
-      return {
-        model,
-        label: MODEL_BUCKET_META[model].label,
-        color: MODEL_BUCKET_META[model].color,
-        tokensIn: row.tokensIn,
-        tokensOut: row.tokensOut,
-        estimatedCostUSD: row.estimatedCostUSD,
-        percentOfTotal: totalTokens ? (total / totalTokens) * 100 : 0,
-      };
-    });
+    const byModel = Object.values(grouped)
+      .sort((a, b) => {
+        const aPinnedIdx = a.pinned ? PINNED_MODELS.indexOf(a.pinned) : Number.POSITIVE_INFINITY;
+        const bPinnedIdx = b.pinned ? PINNED_MODELS.indexOf(b.pinned) : Number.POSITIVE_INFINITY;
+        if (aPinnedIdx !== bPinnedIdx) return aPinnedIdx - bPinnedIdx;
+
+        const aTotal = a.tokensIn + a.tokensOut;
+        const bTotal = b.tokensIn + b.tokensOut;
+        if (aTotal !== bTotal) return bTotal - aTotal;
+
+        return a.label.localeCompare(b.label);
+      })
+      .map((row) => {
+        const total = row.tokensIn + row.tokensOut;
+        return {
+          model: row.key,
+          label: row.label,
+          color: row.color,
+          tokensIn: row.tokensIn,
+          tokensOut: row.tokensOut,
+          estimatedCostUSD: row.estimatedCostUSD,
+          percentOfTotal: totalTokens ? (total / totalTokens) * 100 : 0,
+        };
+      });
 
     const activity = [...current]
       .sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp))
       .slice(0, 10)
       .map((s) => {
-        const bucket = mapModelToBucket(s.model || '');
-        const meta = MODEL_BUCKET_META[bucket];
+        const pinned = mapModelToPinned(s.model || '');
+        const label = pinned ? PINNED_MODEL_META[pinned].label : modelMeta(s.model).label;
+        const color = pinned ? PINNED_MODEL_META[pinned].color : modelMeta(s.model).color;
+
         return {
           id: s.id ?? `${s.model}-${getTimestampMs(s.timestamp)}`,
-          model: meta?.label ?? modelMeta(s.model).label,
-          color: meta?.color ?? modelMeta(s.model).color,
+          model: label,
+          color,
           tokens: (s.tokensIn || 0) + (s.tokensOut || 0),
           session: shortSession(s.sessionKey),
           timestamp: new Date(getTimestampMs(s.timestamp)).toISOString(),
