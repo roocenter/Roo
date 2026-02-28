@@ -159,6 +159,7 @@ export function useTokenStats(range: TimeRange) {
     const currentStart = now - windowMs;
 
     const sourceData = rawSnapshots.length ? rawSnapshots : createMockData();
+    const latestSnapshotAt = rawSnapshots.length ? Math.max(...rawSnapshots.map((s) => getTimestampMs(s.timestamp))) : null;
 
     const current = sourceData.filter((s) => {
       const t = getTimestampMs(s.timestamp);
@@ -308,6 +309,7 @@ export function useTokenStats(range: TimeRange) {
       chartData: points,
       modelBreakdown: byModel,
       activity,
+      latestSnapshotAt,
       usingMockData: rawSnapshots.length === 0,
     };
   }, [rawSnapshots, loading, error, range]);

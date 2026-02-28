@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityFeed } from '@/components/ActivityFeed';
 import { KPICard } from '@/components/KPICard';
 import { ModelBreakdown } from '@/components/ModelBreakdown';
@@ -11,20 +11,46 @@ import { TimeRange, useTokenStats } from '@/hooks/useTokenStats';
 import { useTokenWriter } from '@/hooks/useTokenWriter';
 
 const ranges: TimeRange[] = ['1H', '6H', '24H', '7D', '30D'];
+const SNAPSHOT_INTERVAL_MS = 30 * 60 * 1000;
 
 function formatCompact(value: number) {
   return Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 }
 
+function formatCountdown(msRemaining: number) {
+  const safe = Math.max(0, msRemaining);
+  const totalSeconds = Math.floor(safe / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
 export default function TokenStatsPage() {
   const [range, setRange] = useState<TimeRange>('24H');
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const data = useTokenStats(range);
 
   useTokenWriter();
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const snapshotCountdownLabel = useMemo(() => {
+    if (!data.latestSnapshotAt) return 'Waiting for first snapshot…';
+
+    const nextAt = data.latestSnapshotAt + SNAPSHOT_INTERVAL_MS;
+    const remainingMs = Math.max(0, nextAt - nowMs);
+    return `Next snapshot in ${formatCountdown(remainingMs)}`;
+  }, [data.latestSnapshotAt, nowMs]);
+
   return (
     <div className="min-h-screen bg-bg text-text">
-      <TopBar />
+      <TopBar snapshotCountdownLabel={snapshotCountdownLabel} />
       <div className="flex min-h-[calc(100vh-56px)]">
         <Sidebar />
 
