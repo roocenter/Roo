@@ -3,13 +3,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { estimateCostUSD, MODEL_ORDER, modelMeta } from '@/lib/costEstimator';
+import { estimateCostUSD, modelMeta } from '@/lib/costEstimator';
 
 export type TimeRange = '1H' | '6H' | '24H' | '7D' | '30D';
 
 export type TokenSnapshot = {
   id?: string;
-  timestamp: string;
+  timestamp: unknown;
   sessionKey: string;
   model: string;
   tokensIn: number;
@@ -40,7 +40,23 @@ const BUCKETS: Record<TimeRange, number> = {
   '30D': 15,
 };
 
-const MOCK_MODELS = [...MODEL_ORDER];
+const MODEL_BUCKETS = ['gpt-5.2', 'codex-5.3', 'claude-sonnet', 'codex-mini'] as const;
+type ModelBucket = (typeof MODEL_BUCKETS)[number] | 'other';
+
+const MODEL_BUCKET_META: Record<ModelBucket, { label: string; color: string }> = {
+  'gpt-5.2': { label: 'gpt-5.2', color: '#3b82f6' },
+  'codex-5.3': { label: 'codex-5.3', color: '#7c3aed' },
+  'claude-sonnet': { label: 'claude-sonnet', color: '#f97316' },
+  'codex-mini': { label: 'codex-mini', color: '#22c55e' },
+  other: { label: 'other', color: '#71717a' },
+};
+
+const MOCK_MODELS = [
+  'openai/gpt-5.2',
+  'openai-codex/gpt-5.3-codex',
+  'anthropic/claude-sonnet-4-6',
+  'openai-codex/gpt-5.1-codex-mini',
+];
 
 function createMockData(): TokenSnapshot[] {
   const now = Date.now();
@@ -74,6 +90,29 @@ function formatBucketLabel(date: Date, range: TimeRange) {
 function shortSession(sessionKey: string) {
   const parts = sessionKey.split(':');
   return parts.slice(-2).join(':') || sessionKey;
+}
+
+function getTimestampMs(timestamp: unknown): number {
+  if (!timestamp) return 0;
+  if (typeof timestamp === 'string' || typeof timestamp === 'number') return new Date(timestamp).getTime();
+  if (timestamp instanceof Date) return timestamp.getTime();
+
+  if (typeof timestamp === 'object') {
+    const ts = timestamp as { toMillis?: () => number; seconds?: number; nanoseconds?: number };
+    if (typeof ts.toMillis === 'function') return ts.toMillis();
+    if (typeof ts.seconds === 'number') return ts.seconds * 1000 + Math.floor((ts.nanoseconds ?? 0) / 1_000_000);
+  }
+
+  return 0;
+}
+
+function mapModelToBucket(model: string): ModelBucket {
+  const normalized = model.toLowerCase();
+  if (normalized.includes('gpt-5.3-codex')) return 'codex-5.3';
+  if (normalized.includes('gpt-5.1-codex-mini')) return 'codex-mini';
+  if (normalized.includes('claude-sonnet')) return 'claude-sonnet';
+  if (normalized.includes('gpt-5.2')) return 'gpt-5.2';
+  return 'other';
 }
 
 export function useTokenStats(range: TimeRange) {
@@ -110,12 +149,12 @@ export function useTokenStats(range: TimeRange) {
     const sourceData = rawSnapshots.length ? rawSnapshots : createMockData();
 
     const current = sourceData.filter((s) => {
-      const t = new Date(s.timestamp).getTime();
+      const t = getTimestampMs(s.timestamp);
       return t >= currentStart && t <= now;
     });
 
     const previous = sourceData.filter((s) => {
-      const t = new Date(s.timestamp).getTime();
+      const t = getTimestampMs(s.timestamp);
       return t >= previousStart && t < currentStart;
     });
 
@@ -146,7 +185,7 @@ export function useTokenStats(range: TimeRange) {
       const start = currentStart + i * bucketSize;
       const end = start + bucketSize;
       const bucketData = current.filter((s) => {
-        const t = new Date(s.timestamp).getTime();
+        const t = getTimestampMs(s.timestamp);
         return t >= start && t < end;
       });
       const pointTime = new Date(start + bucketSize / 2);
@@ -157,37 +196,65 @@ export function useTokenStats(range: TimeRange) {
       };
     });
 
-    const byModel = MODEL_ORDER.map((model) => {
-      const modelRows = current.filter((s) => s.model === model);
-      const modelIn = modelRows.reduce((acc, s) => acc + (s.tokensIn || 0), 0);
-      const modelOut = modelRows.reduce((acc, s) => acc + (s.tokensOut || 0), 0);
-      const modelCost = modelRows.reduce(
-        (acc, s) => acc + (s.estimatedCostUSD ?? estimateCostUSD(s.model, s.tokensIn || 0, s.tokensOut || 0)),
-        0
-      );
-      const total = modelIn + modelOut;
+    const grouped = current.reduce(
+      (acc, s) => {
+        const bucket = mapModelToBucket(s.model || '');
+        const tokensIn = s.tokensIn || 0;
+        const tokensOut = s.tokensOut || 0;
+        const fallbackModel =
+          bucket === 'gpt-5.2'
+            ? 'openai/gpt-5.2'
+            : bucket === 'codex-5.3'
+              ? 'openai-codex/gpt-5.3-codex'
+              : bucket === 'claude-sonnet'
+                ? 'anthropic/claude-sonnet-4-6'
+                : bucket === 'codex-mini'
+                  ? 'openai-codex/gpt-5.1-codex-mini'
+                  : s.model;
+
+        acc[bucket].tokensIn += tokensIn;
+        acc[bucket].tokensOut += tokensOut;
+        acc[bucket].estimatedCostUSD += s.estimatedCostUSD ?? estimateCostUSD(fallbackModel, tokensIn, tokensOut);
+        return acc;
+      },
+      {
+        'gpt-5.2': { tokensIn: 0, tokensOut: 0, estimatedCostUSD: 0 },
+        'codex-5.3': { tokensIn: 0, tokensOut: 0, estimatedCostUSD: 0 },
+        'claude-sonnet': { tokensIn: 0, tokensOut: 0, estimatedCostUSD: 0 },
+        'codex-mini': { tokensIn: 0, tokensOut: 0, estimatedCostUSD: 0 },
+        other: { tokensIn: 0, tokensOut: 0, estimatedCostUSD: 0 },
+      } as Record<ModelBucket, { tokensIn: number; tokensOut: number; estimatedCostUSD: number }>
+    );
+
+    const byModel = MODEL_BUCKETS.map((model) => {
+      const row = grouped[model];
+      const total = row.tokensIn + row.tokensOut;
       return {
         model,
-        label: modelMeta(model).label,
-        color: modelMeta(model).color,
-        tokensIn: modelIn,
-        tokensOut: modelOut,
-        estimatedCostUSD: modelCost,
+        label: MODEL_BUCKET_META[model].label,
+        color: MODEL_BUCKET_META[model].color,
+        tokensIn: row.tokensIn,
+        tokensOut: row.tokensOut,
+        estimatedCostUSD: row.estimatedCostUSD,
         percentOfTotal: totalTokens ? (total / totalTokens) * 100 : 0,
       };
     });
 
     const activity = [...current]
-      .sort((a, b) => +new Date(b.timestamp) - +new Date(a.timestamp))
+      .sort((a, b) => getTimestampMs(b.timestamp) - getTimestampMs(a.timestamp))
       .slice(0, 10)
-      .map((s) => ({
-        id: s.id ?? `${s.model}-${s.timestamp}`,
-        model: modelMeta(s.model).label,
-        color: modelMeta(s.model).color,
-        tokens: (s.tokensIn || 0) + (s.tokensOut || 0),
-        session: shortSession(s.sessionKey),
-        timestamp: s.timestamp,
-      }));
+      .map((s) => {
+        const bucket = mapModelToBucket(s.model || '');
+        const meta = MODEL_BUCKET_META[bucket];
+        return {
+          id: s.id ?? `${s.model}-${getTimestampMs(s.timestamp)}`,
+          model: meta?.label ?? modelMeta(s.model).label,
+          color: meta?.color ?? modelMeta(s.model).color,
+          tokens: (s.tokensIn || 0) + (s.tokensOut || 0),
+          session: shortSession(s.sessionKey),
+          timestamp: new Date(getTimestampMs(s.timestamp)).toISOString(),
+        };
+      });
 
     return {
       loading,
