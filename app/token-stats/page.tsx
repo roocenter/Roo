@@ -43,8 +43,15 @@ export default function TokenStatsPage() {
   const snapshotCountdownLabel = useMemo(() => {
     if (!data.latestSnapshotAt) return 'Waiting for first snapshot…';
 
-    const nextAt = data.latestSnapshotAt + SNAPSHOT_INTERVAL_MS;
+    // Writer runs every ~30 minutes, but the dashboard might be opened long after the
+    // last snapshot. Roll the next expected time forward so it’s always in the future.
+    const lastAt = data.latestSnapshotAt;
+    const elapsed = nowMs - lastAt;
+
+    const cycles = elapsed > 0 ? Math.floor(elapsed / SNAPSHOT_INTERVAL_MS) : 0;
+    const nextAt = lastAt + (cycles + 1) * SNAPSHOT_INTERVAL_MS;
     const remainingMs = Math.max(0, nextAt - nowMs);
+
     return `Next snapshot in ${formatCountdown(remainingMs)}`;
   }, [data.latestSnapshotAt, nowMs]);
 
