@@ -30,7 +30,12 @@ export default function TokenStatsPage() {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const data = useTokenStats(range);
 
-  useTokenWriter();
+  // Prefer the external `firestore-writer` service for reliability (works even when the
+  // OpenClaw gateway endpoints don’t expose JSON usage). Enable local writer only when
+  // explicitly requested.
+  if (process.env.NEXT_PUBLIC_ENABLE_LOCAL_TOKEN_WRITER === 'true') {
+    useTokenWriter();
+  }
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -41,7 +46,7 @@ export default function TokenStatsPage() {
   }, []);
 
   const snapshotCountdownLabel = useMemo(() => {
-    if (!data.latestSnapshotAt) return 'Waiting for first snapshot…';
+    if (!data.latestSnapshotAt) return 'Waiting for first update…';
 
     // Writer runs every ~30 minutes, but the dashboard might be opened long after the
     // last snapshot. Roll the next expected time forward so it’s always in the future.
@@ -52,7 +57,7 @@ export default function TokenStatsPage() {
     const nextAt = lastAt + (cycles + 1) * SNAPSHOT_INTERVAL_MS;
     const remainingMs = Math.max(0, nextAt - nowMs);
 
-    return `Next snapshot in ${formatCountdown(remainingMs)}`;
+    return `Next update in ${formatCountdown(remainingMs)}`;
   }, [data.latestSnapshotAt, nowMs]);
 
   return (
