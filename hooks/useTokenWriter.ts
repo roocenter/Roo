@@ -7,18 +7,24 @@ import { estimateCostUSD } from '@/lib/costEstimator';
 
 type GatewayUsageRow = {
   sessionKey: string;
+  sessionId?: string;
   model: string;
   tokensIn: number;
   tokensOut: number;
   cacheHitRate?: number;
 };
 
-type LastTotals = Record<string, { tokensIn: number; tokensOut: number; model: string }>; 
+type LastTotals = Record<string, { tokensIn: number; tokensOut: number }>; 
 
 const GATEWAY_URL = 'http://localhost:18789';
 const LOCAL_PROXY_URL = '/api/openclaw/sessions';
 const SNAPSHOT_INTERVAL_MS = 30 * 60 * 1000;
-const STORAGE_KEY = 'roo.tokenWriter.lastTotals.v1';
+const STORAGE_KEY = 'roo.tokenWriter.lastTotals.v2';
+
+function stableSessionKey(row: GatewayUsageRow): string {
+  if (row.sessionId) return `sessionId:${row.sessionId}`;
+  return `sessionKey:${row.sessionKey}`;
+}
 
 function parseRows(payload: unknown): GatewayUsageRow[] {
   if (!payload || typeof payload !== 'object') return [];
@@ -37,7 +43,8 @@ function parseRows(payload: unknown): GatewayUsageRow[] {
       if (!Number.isFinite(tokensIn) || !Number.isFinite(tokensOut)) return null;
 
       return {
-        sessionKey: String(row.sessionKey ?? row.session ?? row.id ?? 'agent:unknown:unknown'),
+        sessionKey: String(row.sessionKey ?? row.session ?? row.key ?? row.id ?? 'agent:unknown:unknown'),
+        sessionId: row.sessionId ? String(row.sessionId) : undefined,
         model: String(row.model ?? row.modelId ?? 'openai/gpt-5.2'),
         tokensIn,
         tokensOut,
@@ -96,18 +103,20 @@ async function pollGatewayAndWrite(token: string) {
 
       const writes = rows
         .map((row) => {
-          const key = `${row.sessionKey}::${row.model}`;
+          const key = stableSessionKey(row);
           const prev = lastTotals[key];
           const deltaIn = Math.max(0, row.tokensIn - (prev?.tokensIn ?? 0));
           const deltaOut = Math.max(0, row.tokensOut - (prev?.tokensOut ?? 0));
 
-          lastTotals[key] = { tokensIn: row.tokensIn, tokensOut: row.tokensOut, model: row.model };
+          lastTotals[key] = { tokensIn: row.tokensIn, tokensOut: row.tokensOut };
 
           if (deltaIn + deltaOut <= 0) return null;
 
           return addDoc(collection(db, 'token_snapshots'), {
             timestamp: nowIso,
             sessionKey: row.sessionKey,
+            sessionId: row.sessionId ?? null,
+            sessionStableKey: key,
             model: row.model,
             tokensIn: deltaIn,
             tokensOut: deltaOut,

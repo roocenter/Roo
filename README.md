@@ -17,7 +17,7 @@ A clean dark Next.js dashboard for monitoring OpenClaw AI agent token usage.
   - Model breakdown (4 fixed models)
   - Live activity feed (10 latest events)
 - Firestore remote reader (`hooks/useTokenStats.ts`)
-- Local gateway writer (`hooks/useTokenWriter.ts`) polling every 30s
+- Local gateway writer (`hooks/useTokenWriter.ts`) polling every 30 minutes (optional; external writer recommended)
 - Mock data fallback when Firestore is empty
 
 ## Local Development
@@ -32,7 +32,10 @@ Open http://localhost:3000
 Create `.env.local`:
 ```env
 NEXT_PUBLIC_GATEWAY_TOKEN=YOUR_OPENCLAW_GATEWAY_TOKEN
+NEXT_PUBLIC_ENABLE_LOCAL_TOKEN_WRITER=false
 ```
+
+Set `NEXT_PUBLIC_ENABLE_LOCAL_TOKEN_WRITER=true` only for localhost fallback writing. In production/Netlify, keep it `false` and run the dedicated `firestore-writer` service.
 
 ## Build Check
 ```bash
